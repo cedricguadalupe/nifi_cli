@@ -145,7 +145,7 @@ def stop(environment, id):
 
 @cli.command()
 @click.argument("environment")
-def list_tempates(environment):
+def list_templates(environment):
     """
     Lister tous les templates
     """
