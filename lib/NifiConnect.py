@@ -17,7 +17,6 @@ def add_log(level, msg):
                 print("%s|%s|%s" % (now_datetime.strftime("%Y-%m-%d %H:%M:%S"), level, msg))
 
 
-
 class NifiAuth:
     NONE = 0
     NORMAL = 1
@@ -31,6 +30,7 @@ class NifiConnect:
         self.username = ""
         self.password = ""
         self.token = None
+        self.no_proxy = False
         self.keytab = ""
         self.principal = ""
         pass
@@ -56,6 +56,8 @@ class NifiConnect:
                 self.auth_mode = NifiAuth.KERBEROS
                 self.keytab = config_parser.get(env, "nifi.auth.keytab")
                 self.principal = config_parser.get(env, "nifi.auth.principal")
+        if config_parser.has_option(env, "nifi.no_proxy"):
+            self.no_proxy = config_parser.get(env, "nifi.no_proxy").lower() == "true"
         pass
 
     def connect(self):
@@ -67,7 +69,10 @@ class NifiConnect:
                 "username": self.username,
                 "password": self.password
             })
-            p = subprocess.Popen("curl --data \"" + header + "\" -k " + url_to_connect, shell=True,
+            str_no_proxy = ""
+            if self.no_proxy:
+                str_no_proxy = "--noproxy '*' "
+            p = subprocess.Popen("curl " + str_no_proxy + "--data \"" + header + "\" -k " + url_to_connect, shell=True,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             out, err = p.communicate()
             if p.returncode == 0:
@@ -84,12 +89,18 @@ class NifiConnect:
             return False
 
     def get_curl_command(self, sub_command, other=""):
+        str_no_proxy = ""
+        if self.no_proxy:
+            str_no_proxy = "--noproxy '*' "
         if self.auth_mode != NifiAuth.NONE:
-            return "curl -k " + other + " " + self.url + sub_command + " -H 'Authorization: Bearer " + self.token + "'"
+            return "curl -k " + str_no_proxy + other + " " + self.url + sub_command + " -H 'Authorization: Bearer " + self.token + "'"
         else:
-            return "curl -k " + other + " " + self.url + sub_command
+            return "curl -k " + str_no_proxy + other + " " + self.url + sub_command
 
     def list_process_groups(self, id):
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id) and id != "root":
+            id = self.get_process_group_id_by_name(id)
         curl_command = self.get_curl_command("/flow/process-groups/" + id)
         p = subprocess.Popen(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out, err = p.communicate()
@@ -106,6 +117,9 @@ class NifiConnect:
             raise RuntimeError("Exec error" + curl_command)
 
     def delete(self, id):
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id):
+            id = self.get_process_group_id_by_name(id)
         info_process_group = self.info_process_group(id)
         headers = urllib.urlencode({
 
@@ -129,6 +143,9 @@ class NifiConnect:
             raise RuntimeError("Exec error" + curl_command)
 
     def info(self, id):
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id):
+            id = self.get_process_group_id_by_name(id)
         curl_command = self.get_curl_command("/flow/process-groups/" + id + "/status")
         p = subprocess.Popen(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out, err = p.communicate()
@@ -140,6 +157,9 @@ class NifiConnect:
             raise RuntimeError("Exec error" + curl_command)
 
     def start(self, id):
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id):
+            id = self.get_process_group_id_by_name(id)
         headers = json.dumps({
             "id": id,
             "state": "RUNNING"
@@ -157,6 +177,9 @@ class NifiConnect:
             raise RuntimeError("Exec error" + curl_command)
 
     def stop(self, id):
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id):
+            id = self.get_process_group_id_by_name(id)
         headers = json.dumps({
             "id": id,
             "state": "STOPPED"
@@ -188,7 +211,17 @@ class NifiConnect:
             add_log("ERROR", err)
             raise RuntimeError("Exec error" + curl_command)
 
+    def get_template_id_by_name(self, name):
+        res = self.list_templates()
+        for result in res:
+            if result[1] == name:
+                return result[0]
+        raise RuntimeError("Template name not found : " + name)
+
     def download(self, id):
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id):
+            id = self.get_template_id_by_name(id)
         results = self.list_templates()
         name = ""
         for result in results:
@@ -216,6 +249,9 @@ class NifiConnect:
             raise RuntimeError("Exec error" + curl_command)
 
     def info_process_group(self, id):
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id):
+            id = self.get_process_group_id_by_name(id)
         curl_command = self.get_curl_command("/process-groups/" + id)
         p = subprocess.Popen(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out, err = p.communicate()
@@ -225,6 +261,13 @@ class NifiConnect:
             add_log("ERROR", out)
             add_log("ERROR", err)
             raise RuntimeError("Exec error" + curl_command)
+
+    def get_process_group_id_by_name(self, name):
+        res = self.list_process_groups("root")
+        for result in res:
+            if str(name) == result[1]:
+                return result[0]
+        raise RuntimeError("Process group name not found : " + name)
 
     def create_snippet(self, id):
         results = self.info_process_group(id)
@@ -258,6 +301,9 @@ class NifiConnect:
             raise RuntimeError("Exec error" + curl_command)
 
     def download_by_process_group(self, id):
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id):
+            id = self.get_process_group_id_by_name(id)
         results = self.list_templates()
         for result in results:
             if result[2] == id:
@@ -284,6 +330,9 @@ class NifiConnect:
             raise RuntimeError("Exec error" + curl_command)
 
     def upload(self, id, template_path):
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id) and id != "root":
+            id = self.get_process_group_id_by_name(id)
         curl_command = self.get_curl_command("/process-groups/" + id + "/templates/upload",
                                              " -X POST -F template=@" + template_path)
         p = subprocess.Popen(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -297,6 +346,9 @@ class NifiConnect:
         pass
 
     def delete_template(self, id):
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id):
+            id = self.get_template_id_by_name(id)
         curl_command = self.get_curl_command("/templates/" + id, " -X DELETE")
         p = subprocess.Popen(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out, err = p.communicate()
@@ -308,6 +360,12 @@ class NifiConnect:
             raise RuntimeError("Exec error" + curl_command)
 
     def instanciate_template(self, id, id_template):
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id) and id != "root":
+            id = self.get_process_group_id_by_name(id)
+        regex = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        if not regex.match(id_template):
+            id_template = self.get_template_id_by_name(id_template)
         headers = json.dumps({
             "templateId": id_template,
             "originX": 0.0,
